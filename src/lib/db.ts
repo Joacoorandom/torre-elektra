@@ -1,4 +1,4 @@
-import { sql } from "@vercel/postgres";
+import { neon } from "@neondatabase/serverless";
 
 export type UnitType = "departamento" | "oficina" | "recepcion";
 export type UnitStatus = "disponible" | "reservado" | "ocupado";
@@ -17,18 +17,15 @@ export interface Unit {
   notes: string | null;
 }
 
-export interface Reservation {
-  id: number;
-  unit_id: number;
-  name: string;
-  discord: string | null;
-  minecraft_user: string | null;
-  message: string | null;
-  created_at: string;
-  status: "pending" | "confirmed" | "cancelled";
+function getDb() {
+  const url = process.env.DATABASE_URL || process.env.POSTGRES_URL;
+  if (!url) throw new Error("No database URL configured");
+  return neon(url);
 }
 
 export async function setupDatabase() {
+  const sql = getDb();
+
   await sql`
     CREATE TABLE IF NOT EXISTS units (
       id SERIAL PRIMARY KEY,
@@ -59,21 +56,20 @@ export async function setupDatabase() {
     )
   `;
 
-  // Seed initial units if empty
-  const { rows } = await sql`SELECT COUNT(*) as count FROM units`;
+  const rows = await sql`SELECT COUNT(*) as count FROM units`;
   if (parseInt(rows[0].count) === 0) {
     await seedUnits();
   }
 }
 
 async function seedUnits() {
-  // Floor 1 = Recepción
+  const sql = getDb();
+
   await sql`
     INSERT INTO units (floor, unit_number, type, status, size_blocks, notes)
     VALUES (1, '1-RECEPCION', 'recepcion', 'ocupado', 1089, 'Hall principal de la Torre Elektra')
   `;
 
-  // Floors 2-18 = departamentos, 19-35 = oficinas
   for (let floor = 2; floor <= 35; floor++) {
     const type: UnitType = floor <= 18 ? "departamento" : "oficina";
     const unitNumber = `${floor}-A`;
@@ -83,13 +79,11 @@ async function seedUnits() {
     `;
   }
 
-  // Floor 36 = Penthouse
   await sql`
     INSERT INTO units (floor, unit_number, type, status, size_blocks, notes)
     VALUES (36, '36-PENTHOUSE', 'departamento', 'disponible', 1089, 'Piso superior — vista panorámica')
   `;
 
-  // Pre-mark some as reserved
   await sql`
     UPDATE units SET status = 'reservado', reserved_by_name = 'Reservado', notes = 'Ya reservado'
     WHERE floor IN (5, 12)
@@ -97,19 +91,8 @@ async function seedUnits() {
 }
 
 export async function getAllUnits(): Promise<Unit[]> {
-  const { rows } = await sql`SELECT * FROM units ORDER BY floor ASC`;
-  return rows as Unit[];
-}
-
-export async function getUnit(unitNumber: string): Promise<Unit | null> {
-  const { rows } =
-    await sql`SELECT * FROM units WHERE unit_number = ${unitNumber}`;
-  return (rows[0] as Unit) || null;
-}
-
-export async function getFloorUnits(floor: number): Promise<Unit[]> {
-  const { rows } =
-    await sql`SELECT * FROM units WHERE floor = ${floor} ORDER BY unit_number`;
+  const sql = getDb();
+  const rows = await sql`SELECT * FROM units ORDER BY floor ASC`;
   return rows as Unit[];
 }
 
@@ -120,7 +103,8 @@ export async function reserveUnit(
   minecraftUser: string,
   message?: string
 ): Promise<{ success: boolean; error?: string }> {
-  const { rows } = await sql`SELECT status FROM units WHERE id = ${unitId}`;
+  const sql = getDb();
+  const rows = await sql`SELECT status FROM units WHERE id = ${unitId}`;
   if (!rows[0] || rows[0].status !== "disponible") {
     return { success: false, error: "Esta unidad ya no está disponible." };
   }
@@ -151,6 +135,7 @@ export async function cancelReservation(
     return { success: false, error: "No autorizado." };
   }
 
+  const sql = getDb();
   await sql`
     UPDATE units SET
       status = 'disponible',
@@ -165,7 +150,8 @@ export async function cancelReservation(
 }
 
 export async function getStats() {
-  const { rows } = await sql`
+  const sql = getDb();
+  const rows = await sql`
     SELECT
       COUNT(*) FILTER (WHERE status = 'disponible') as disponibles,
       COUNT(*) FILTER (WHERE status = 'reservado') as reservados,
@@ -179,7 +165,8 @@ export async function getStats() {
 }
 
 export async function getAllReservations() {
-  const { rows } = await sql`
+  const sql = getDb();
+  const rows = await sql`
     SELECT
       r.id,
       r.unit_id,
